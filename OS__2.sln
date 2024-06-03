@@ -1,31 +1,295 @@
-﻿
-Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.9.34728.123
-MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OS__2", "OS__2\OS__2.vcxproj", "{47735540-EB1A-4028-9B69-EDE70083E90C}"
-EndProject
-Global
-	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Debug|x64 = Debug|x64
-		Debug|x86 = Debug|x86
-		Release|x64 = Release|x64
-		Release|x86 = Release|x86
-	EndGlobalSection
-	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{47735540-EB1A-4028-9B69-EDE70083E90C}.Debug|x64.ActiveCfg = Debug|x64
-		{47735540-EB1A-4028-9B69-EDE70083E90C}.Debug|x64.Build.0 = Debug|x64
-		{47735540-EB1A-4028-9B69-EDE70083E90C}.Debug|x86.ActiveCfg = Debug|Win32
-		{47735540-EB1A-4028-9B69-EDE70083E90C}.Debug|x86.Build.0 = Debug|Win32
-		{47735540-EB1A-4028-9B69-EDE70083E90C}.Release|x64.ActiveCfg = Release|x64
-		{47735540-EB1A-4028-9B69-EDE70083E90C}.Release|x64.Build.0 = Release|x64
-		{47735540-EB1A-4028-9B69-EDE70083E90C}.Release|x86.ActiveCfg = Release|Win32
-		{47735540-EB1A-4028-9B69-EDE70083E90C}.Release|x86.Build.0 = Release|Win32
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {EE9C44D8-A0D4-450E-BE9D-649D0BEF2538}
-	EndGlobalSection
-EndGlobal
+#include <iostream>
+#include <fstream>
+#include <thread>
+#include <vector>
+#include <queue>
+#include <string>
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
+#include <sstream>
+#include <numeric>
+#include <future>
+#include <cmath>
+using namespace std;
+
+mutex mtx;
+condition_variable cv;
+bool finished = false;
+queue<string> commandQueue;
+
+void shellProcess();
+void monitorProcess();
+void executeCommand(const string& command);
+vector<string> parseCommand(const string& command);
+void executeBGCommand(const string& command);
+void executeEcho(const vector<string>& args);
+void executeGCD(const vector<string>& args);
+void executePrime(const vector<string>& args);
+void executeSum(const vector<string>& args);
+void executeDummy(const vector<string>& args);
+
+int main() {
+    thread shellThread(shellProcess);
+    thread monitorThread(monitorProcess);
+
+    this_thread::sleep_for(chrono::seconds(50));
+
+    {
+        lock_guard<mutex> lock(mtx);
+        finished = true;
+        cv.notify_all();
+    }
+
+    shellThread.join();
+    monitorThread.join();
+
+    return 0;
+}
+
+void shellProcess() {
+    ifstream commandsFile("commands.txt");
+    string line;
+
+    while (getline(commandsFile, line)) {
+        istringstream iss(line);
+        string command;
+        while (getline(iss, command, ';')) {
+            command = command.substr(command.find_first_not_of(' ')); // Trim leading spaces
+            if (!command.empty()) {
+                {
+                    lock_guard<mutex> lock(mtx);
+                    commandQueue.push(command);
+                    cout << "prompt> " << command << endl;
+                }
+                cv.notify_one();
+                this_thread::sleep_for(chrono::seconds(5)); // Adjust as needed
+            }
+        }
+    }
+
+    {
+        lock_guard<mutex> lock(mtx);
+        finished = true;
+    }
+    cv.notify_one();
+}
+
+void monitorProcess() {
+    while (true) {
+        unique_lock<mutex> lock(mtx);
+        cv.wait(lock, [] { return !commandQueue.empty() || finished; });
+
+        while (!commandQueue.empty()) {
+            string command = commandQueue.front();
+            commandQueue.pop();
+            lock.unlock();
+            if (command[0] == '&') {
+                command = command.substr(1); // Remove '&' prefix
+                thread bgThread(executeBGCommand, command);
+                bgThread.detach();
+            }
+            else {
+                executeCommand(command);
+            }
+            lock.lock();
+        }
+
+        if (finished && commandQueue.empty()) {
+            break;
+        }
+
+        this_thread::sleep_for(chrono::seconds(3));
+    }
+}
+
+void executeCommand(const string& command) {
+    vector<string> args = parseCommand(command);
+
+    if (args.empty()) return;
+
+    if (args[0] == "echo") {
+        executeEcho(args);
+    }
+    else if (args[0] == "dummy") {
+        executeDummy(args);
+    }
+    else if (args[0] == "gcd") {
+        executeGCD(args);
+    }
+    else if (args[0] == "prime") {
+        executePrime(args);
+    }
+    else if (args[0] == "sum") {
+        executeSum(args);
+    }
+    else {
+        cout << "Unknown command: " << command << endl;
+    }
+}
+
+void executeBGCommand(const string& command) {
+    executeCommand(command);
+}
+
+vector<string> parseCommand(const string& command) {
+    vector<string> args;
+    istringstream iss(command);
+    string token;
+    while (iss >> token) {
+        args.push_back(token);
+    }
+    return args;
+}
+
+void executeEcho(const vector<string>& args) {
+    string message = args[1];
+    int period = 0;
+    int duration = 0;
+    int repeat = 1;
+
+    for (size_t i = 2; i < args.size(); ++i) {
+        if (args[i] == "-p") {
+            period = stoi(args[++i]);
+        }
+        else if (args[i] == "-d") {
+            duration = stoi(args[++i]);
+        }
+        else if (args[i] == "-n") {
+            repeat = stoi(args[++i]);
+        }
+    }
+
+    auto start = chrono::steady_clock::now();
+
+    for (int i = 0; i < repeat; ++i) {
+        cout << message << endl;
+        if (period > 0) {
+            this_thread::sleep_for(chrono::seconds(period));
+        }
+        if (duration > 0) {
+            auto now = chrono::steady_clock::now();
+            auto elapsed = chrono::duration_cast<chrono::seconds>(now - start).count();
+            if (elapsed >= duration) {
+                break;
+            }
+        }
+    }
+}
+
+void executeGCD(const vector<string>& args) {
+    int repeat = 1;
+    for (size_t i = 3; i < args.size(); ++i) {
+        if (args[i] == "-n") {
+            repeat = stoi(args[++i]);
+        }
+    }
+
+    for (int i = 0; i < repeat; ++i) {
+        if (args.size() >= 3) {
+            int x = stoi(args[1]);
+            int y = stoi(args[2]);
+            while (y != 0) {
+                int t = y;
+                y = x % y;
+                x = t;
+            }
+            cout << "GCD: " << x << endl;
+        }
+    }
+}
+
+void executePrime(const vector<string>& args) {
+    int repeat = 1;
+    for (size_t i = 2; i < args.size(); ++i) {
+        if (args[i] == "-n") {
+            repeat = stoi(args[++i]);
+        }
+    }
+
+    for (int i = 0; i < repeat; ++i) {
+        if (args.size() >= 2) {
+            int n = stoi(args[1]);
+            vector<bool> isPrime(n + 1, true);
+            isPrime[0] = isPrime[1] = false;
+            for (int i = 2; i * i <= n; ++i) {
+                if (isPrime[i]) {
+                    for (int j = i * i; j <= n; j += i) {
+                        isPrime[j] = false;
+                    }
+                }
+            }
+            int primeCount = count(isPrime.begin(), isPrime.end(), true);
+            cout << "Number of primes <= " << n << ": " << primeCount << endl;
+        }
+    }
+}
+
+void executeSum(const vector<string>& args) {
+    int parts = 1;
+    int repeat = 1;
+    int duration = 0;
+    for (size_t i = 2; i < args.size(); ++i) {
+        if (args[i] == "-m") {
+            parts = stoi(args[++i]);
+        }
+        else if (args[i] == "-n") {
+            repeat = stoi(args[++i]);
+        }
+        else if (args[i] == "-d") {
+            duration = stoi(args[++i]);
+        }
+    }
+
+    auto start = chrono::steady_clock::now();
+
+    for (int i = 0; i < repeat; ++i) {
+        if (args.size() >= 2) {
+            int n = stoi(args[1]);
+            long long sum = 0;
+            vector<future<void>> futures;
+
+            auto sumChunk = [&sum](int start, int end) {
+                long long localSum = 0;
+                for (int i = start; i <= end; ++i) {
+                    localSum = (localSum + i) % 1000000;
+                }
+                sum = (sum + localSum) % 1000000;
+                };
+
+            int chunkSize = n / parts;
+            for (int p = 0; p < parts; ++p) {
+                int start = p * chunkSize + 1;
+                int end = (p == parts - 1) ? n : (start + chunkSize - 1);
+                futures.push_back(async(launch::async, sumChunk, start, end));
+            }
+
+            for (auto& f : futures) {
+                f.get();
+            }
+
+            cout << "Sum: " << sum << endl;
+
+            if (duration > 0) {
+                auto now = chrono::steady_clock::now();
+                auto elapsed = chrono::duration_cast<chrono::seconds>(now - start).count();
+                if (elapsed >= duration) {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void executeDummy(const vector<string>& args) {
+    int repeat = 1;
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (args[i] == "-n") {
+            repeat = stoi(args[++i]);
+        }
+    }
+
+    for (int i = 0; i < repeat; ++i) {
+        // Do nothing
+    }
+}
